@@ -7,6 +7,7 @@
 # Sections  : 
 #            (1) CRSP and Compustat Data Merge
 #            (2) Data wrangling
+#            (3) Table 1 pre-beta, post-beta, post-beta (ln(ME))
 #-------------------------------------------------------------------------------------------------------
 ########################################################################################################
 
@@ -38,7 +39,7 @@ write.csv(data, "compustat_crsp_merged_1958-1989.csv")
 
 data <- read.csv("compustat_crsp_merged_1958-1989.csv")
 
-#-----------------------------------
+datat#-----------------------------------
 # (2) Data wrangling
 #-----------------------------------
 
@@ -66,28 +67,40 @@ data %>%
 
 data <- filter(data, has_Dec == TRUE)
 
+# Calculate Book Equity (BE) : BE = CEQ + TXDB
+data$be <- data$ceq + data$txdb
+
+# Calculate Market Equity (ME) : ME = prcc_f*csho
+data$me <- data$prcc_f*data$csho
+data <- filter(data, me > 0)   # Ensure has me
+
+# Calculate Book-to-Market (BE/ME) : be / me
+data$beme <- data$be/data$me
+
+# Calculate EP : EP = IB + TXDFED + TXDFO + TXDS -  DVP/PRCC_F
+data$ep <- data$ib + data$txdfed + data$txdfo + data$txds - (data$dvp/data$prcc_f)
+
 ## Monthly returns for at least 24 of 60 months preceding July of year t
+data <- mutate(data, month = as.numeric(substr(datadate, 5, 6))) %>%
+  mutate(datadate = as.POSIXct(gsub("^(\\d{4})(\\d{2}).*$", "\\1-\\2-01", datadate),
+                    format("%Y-%m-%d"), tz = "GMT")) %>%  
+  arrange(cusip, datadate) %>%                        
+  filter(between(datadate, 
+         datadate[tail(which(month == 6, arr.ind = TRUE), n = 1)] - (60*60*24*30*60),
+         datadate[tail(which(month == 6, arr.ind = TRUE), n = 1)] -(60*60*24*30*24))) %>%
+  group_by(cusip) %>%
+  mutate(check = abs(lead(month)-month) == 11|abs(lead(month)-month) == 1|abs(lead(month)-month) == 0) %>%
+  filter(all(check == TRUE | check %in% NA)) 
 
-testdata <- select(data, cusip, datadate, fyear)
-
-testdata$check <- 
-
-mutate(testdata, month = as.numeric(substr(datadate, 5, 6))) %>%
-mutate(datadate = as.POSIXct(gsub("^(\\d{4})(\\d{2}).*$", "\\1-\\2-01", datadate),
-                  format("%Y-%m-%d"), tz = "GMT")) %>%  
-arrange(cusip, datadate) %>%                        
-filter(between(datadate, 
-       datadate[tail(which(month == 6, arr.ind = TRUE), n = 1)] - (60*60*24*30*60),
-       datadate[tail(which(month == 6, arr.ind = TRUE), n = 1)] -(60*60*24*30*24))) %>%
-group_by(cusip) %>%
-mutate(check = abs(lead(month)-month) == 11|abs(lead(month)-month) == 1|abs(lead(month)-month) == 0) %>%
-filter(all(check == TRUE | check %in% NA)) -> output
-
-write.csv(testdata, "testdata.csv")
+# Write out sample dataset after all checks and ready for regressions
+write.csv(data, "92_data.csv")
 
 
-for(i in min(testdata$cusip):max(testdata$cusip)){ 
-    for (j in min(testdata$fyear):max(testdata$fyear)) {
-      monthcheck <- filter(testdata, cusip == i & (fyear == j-1 | fyear == j-2 | fyear == j-3 | fyear == j-4))
-      if(length(monthcheck$month) / 60 >= 0.4) if(any(testdata$fyear == j)) testdata$check <- 1 
-}}
+#-------------------------------------------------------
+# (3) Table 1 pre-beta, post-beta, post-beta (ln(ME))
+#-------------------------------------------------------
+
+
+
+
+##########################
