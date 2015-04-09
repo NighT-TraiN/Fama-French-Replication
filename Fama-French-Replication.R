@@ -76,7 +76,7 @@ write.csv(crsp, "crsp_92_data.csv")
 
 
 # Get 10% percentile for each June 
-percentile_check <- filter(crsp, date = substr(date, 6, 7) == "06" )
+percentile_check <- filter(crsp, date = substr(date, 6, 7) == "06" & fyear == "1970")
 per <- quantile(percentile_check$me, c(.05, .15, .25, .35, .45, .55, .65, .75, .85, .95))
 
                  
