@@ -5,9 +5,11 @@
 # Filename  : Fama-French-Replication.R
 # Code      : Fama-French '92 Replication 
 # Sections  : 
-#            (1) CRSP and Compustat Data Merge
-#            (2) Data wrangling
-#            (3) Table 1 pre-beta, post-beta, post-beta (ln(ME))
+#            (1) CRSP Data setup
+#            (2) Table 1 pre-beta, post-beta, post-beta (ln(ME))
+#            (3) 
+#           (**) CRSP and Compustat Data Merge)
+#           (**) Data Wrangling
 #-------------------------------------------------------------------------------------------------------
 ########################################################################################################
 
@@ -16,9 +18,74 @@ rm(list=ls(all=TRUE))
 library(dplyr)      # Data wrangling
 
 #-----------------------------------
-# (1) CRSP and Compustat Data Merge
+# (1) CRSP Data setup
 #-----------------------------------
 
+setwd("/run/media/john/1TB/Projects/Fama-French Replicatoin/")
+crsp <- read.csv("Crsp.csv")
+
+# Fix missing fyears
+crsp$fyear <- substr(crsp$date, 1, 4)
+
+# Only keep those stocks with returns at the end of June
+crsp <- crsp %>%
+  group_by(PERMCO, fyear) %>%
+  mutate(month = substr(date, 5, 6),
+         has_June = any(month == "06"))
+
+crsp <- filter(crsp, has_June == TRUE)
+
+# Only keep those stocks with returns at the end of December
+crsp <- crsp %>%
+  group_by(PERMCO, fyear) %>%
+  mutate(month = substr(date, 5, 6),
+         has_Dec = any(month == "12"))
+
+crsp <- filter(crsp, has_Dec == TRUE)
+
+# Calculate Market Equity (ME) : ME = prcc_f*csho
+crsp$me <- abs(crsp$PRC)*abs(crsp$SHROUT)
+crsp <- filter(crsp, me > 0)   # Ensure has me
+
+## Monthly returns for at least 24 of 60 months preceding July of year t
+
+# Need to ungroup data to run this
+crsp <- ungroup(crsp)
+
+crsp <- mutate(crsp, month = as.numeric(substr(date, 5, 6))) %>%
+  mutate(date = as.POSIXct(gsub("^(\\d{4})(\\d{2}).*$", "\\1-\\2-01", date),
+                    format("%Y-%m-%d"), tz = "GMT")) %>%  
+  arrange(PERMCO, date) %>%                        
+  filter(between(date, 
+         date[tail(which(month == 6, arr.ind = TRUE), n = 1)] - (60*60*24*30*60),
+         date[tail(which(month == 6, arr.ind = TRUE), n = 1)] -(60*60*24*30*24))) %>%
+  group_by(PERMCO) %>%
+  mutate(check = abs(lead(month)-month) == 11|abs(lead(month)-month) == 1|abs(lead(month)-month) == 0) %>%
+  filter(all(check == TRUE | check %in% NA)) 
+
+# Write out sample dataset after all checks and ready for regressions (obs = 11,721)
+write.csv(crsp, "crsp_92_data.csv")
+
+
+
+
+
+#---------------------------------------------------------
+# (2) Table 1 pre-beta, post-beta, post-beta (ln(ME))
+#---------------------------------------------------------
+
+
+# Get 10% percentile for each June 
+percentile_check <- filter(crsp, date = substr(date, 6, 7) == "06" )
+per <- quantile(percentile_check$me, c(.05, .15, .25, .35, .45, .55, .65, .75, .85, .95))
+
+                 
+       
+#----------------------------------------
+# (**) CRSP and Compustat Data Merge)
+#----------------------------------------
+                 
+                                            
 setwd("/run/media/john/1TB/Projects/Fama-French Replicatoin/")
 
 compustat <- read.csv("Compustat.csv", header = TRUE, stringsAsFactors = FALSE)
@@ -39,10 +106,9 @@ write.csv(data, "compustat_crsp_merged_1958-1989.csv")
 
 data <- read.csv("compustat_crsp_merged_1958-1989.csv")
 
-datat#-----------------------------------
-# (2) Data wrangling
-#-----------------------------------
-
+#----------------------------------------
+# (**) Data Wrangling
+#----------------------------------------
 # Fix missing fyears
 data$fyear <- substr(data$datadate, 1, 4)
 
@@ -80,7 +146,12 @@ data$beme <- data$be/data$me
 # Calculate EP : EP = IB + TXDFED + TXDFO + TXDS -  DVP/PRCC_F
 data$ep <- data$ib + data$txdfed + data$txdfo + data$txds - (data$dvp/data$prcc_f)
 
+
 ## Monthly returns for at least 24 of 60 months preceding July of year t
+
+# Need to ungroup data to run this
+data <- ungroup(data)
+
 data <- mutate(data, month = as.numeric(substr(datadate, 5, 6))) %>%
   mutate(datadate = as.POSIXct(gsub("^(\\d{4})(\\d{2}).*$", "\\1-\\2-01", datadate),
                     format("%Y-%m-%d"), tz = "GMT")) %>%  
@@ -92,15 +163,8 @@ data <- mutate(data, month = as.numeric(substr(datadate, 5, 6))) %>%
   mutate(check = abs(lead(month)-month) == 11|abs(lead(month)-month) == 1|abs(lead(month)-month) == 0) %>%
   filter(all(check == TRUE | check %in% NA)) 
 
-# Write out sample dataset after all checks and ready for regressions
+# Write out sample dataset after all checks and ready for regressions (obs = 11,721)
 write.csv(data, "92_data.csv")
-
-
-#-------------------------------------------------------
-# (3) Table 1 pre-beta, post-beta, post-beta (ln(ME))
-#-------------------------------------------------------
-
-
 
 
 ##########################
