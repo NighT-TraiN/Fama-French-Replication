@@ -22,7 +22,7 @@ library(dplyr)      # Data wrangling
 #-----------------------------------
 
 setwd("/run/media/john/1TB/Projects/Fama-French Replicatoin/")
-crsp2 <- read.csv("Crsp.csv")
+crsp2 <- read.csv("Crsp.csv", stringsAsFactors = FALSE)
 
 # Convert colnames to lower case
 
@@ -101,36 +101,27 @@ for(i in unique(crsp$fyear)){
   crsp$portf[crsp$me >= per[[9]]]  <- "M10"
   }
 
-# Create lag variables for vwretd
-testing <- crsp
-testing <- arrange(testing, desc(date))
-testing$lagvwretd <- lag(testing$vwretd)
-testing <- testing[complete.cases(testing),]
+# Regress ret ~ vwretd + lag(vwretd)
+crsp <- filter(crsp, ret != "C")
+crsp$ret <- as.numeric(crsp$ret)
 
-testing$ret <- as.numeric(as.character(testing$ret))                     # R treats this as a factor, so need to remove to regress
+# Lag ewretd
+crsp <- crsp %>% 
+  group_by(cusip) %>% 
+  arrange(desc(date)) %>% 
+  mutate(lagewretd = lag(ewretd))
+crsp <- filter(crsp, lagewretd != "NA")
 
-testing <- filter(crsp, month == 6)
 
-res <- testing %>% 
+res1 <- crsp %>%  
   group_by(cusip, fyear) %>% 
   arrange(desc(date)) %>% 
-  filter(n()!=1) %>% 
-  do({fm <- lm(ret~vwretd + lag(vwretd), data=.); data.frame(., beta=sum(coef(fm)[-1]))})
+  mutate(n=n()) %>%
+  do(data.frame(., beta=ifelse(.$n > 2,
+   sum(coef(lm(ret~ewretd+lag(ewretd), data=.))[-1]), NA)))
 
 
-test <- testing %>% 
-  group_by(cusip, fyear) %>% 
-  arrange(desc(date)) %>% 
-  filter(n()!=1) %>% 
-  do( {fm <- lm(ret~vwretd+lag(vwretd),  na.action=NULL, data=.); data.frame(., beta=summary(fm)$coefficients[2,1]+summary(fm)$coefficients[3,1])})
 
-testing <- crsp
-testing <- arrange(testing, desc(date))
-testing$ret <- as.numeric(as.character(testing$ret))                     # R treats this as a factor, so need to remove to regress
-
-mb <- lm(ret ~ vwretd + lag(vwretd), data = testing)
-summary(mb)
-       
 #----------------------------------------
 # (**) CRSP and Compustat Data Merge)
 #----------------------------------------
