@@ -22,14 +22,18 @@ library(dplyr)      # Data wrangling
 #-----------------------------------
 
 setwd("/run/media/john/1TB/Projects/Fama-French Replicatoin/")
-crsp <- read.csv("Crsp.csv")
+crsp2 <- read.csv("Crsp.csv")
+
+# Convert colnames to lower case
+
+colnames(crsp) <- tolower(colnames(crsp))
 
 # Fix missing fyears
 crsp$fyear <- substr(crsp$date, 1, 4)
 
 # Only keep those stocks with returns at the end of June
 crsp <- crsp %>%
-  group_by(PERMCO, fyear) %>%
+  group_by(cusip, fyear) %>%
   mutate(month = substr(date, 5, 6),
          has_June = any(month == "06"))
 
@@ -37,49 +41,95 @@ crsp <- filter(crsp, has_June == TRUE)
 
 # Only keep those stocks with returns at the end of December
 crsp <- crsp %>%
-  group_by(PERMCO, fyear) %>%
+  group_by(cusip, fyear) %>%
   mutate(month = substr(date, 5, 6),
          has_Dec = any(month == "12"))
 
 crsp <- filter(crsp, has_Dec == TRUE)
 
-# Calculate Market Equity (ME) : ME = prcc_f*csho
-crsp$me <- abs(crsp$PRC)*abs(crsp$SHROUT)
+# Calculate Market Equity (ME) : ME = prc*shrout
+crsp$me <- (abs(crsp$prc)*crsp$shrout)/1000
 crsp <- filter(crsp, me > 0)   # Ensure has me
 
 ## Monthly returns for at least 24 of 60 months preceding July of year t
 
-# Need to ungroup data to run this
-crsp <- ungroup(crsp)
+check_crsp <- crsp %>%
+  group_by(cusip, fyear) %>%
+  summarise(number = n(), share = n() / 60)  %>% 
+  mutate( cum_y = lag(cumsum(share)), 
+          cum_y4 = lag(cum_y, 4),
+          last4 = ifelse(is.na(cum_y4), cum_y, cum_y - cum_y4),
+          check = as.numeric( last4 >= 0.4 )
+          ) %>%
+  select(fyear, last4, check)
 
-crsp <- mutate(crsp, month = as.numeric(substr(date, 5, 6))) %>%
-  mutate(date = as.POSIXct(gsub("^(\\d{4})(\\d{2}).*$", "\\1-\\2-01", date),
-                    format("%Y-%m-%d"), tz = "GMT")) %>%  
-  arrange(PERMCO, date) %>%                        
-  filter(between(date, 
-         date[tail(which(month == 6, arr.ind = TRUE), n = 1)] - (60*60*24*30*60),
-         date[tail(which(month == 6, arr.ind = TRUE), n = 1)] -(60*60*24*30*24))) %>%
-  group_by(PERMCO) %>%
-  mutate(check = abs(lead(month)-month) == 11|abs(lead(month)-month) == 1|abs(lead(month)-month) == 0) %>%
-  filter(all(check == TRUE | check %in% NA)) 
+# Join in checked crsp
+tcrsp <- left_join(crsp, check_crsp, by = c("cusip", "fyear"))
 
-# Write out sample dataset after all checks and ready for regressions (obs = 11,721)
+# Remove all those not meeting check
+crsp <- filter(tcrsp, check == 1)
+
+# Remove all obs outside July 1962 - Dec 1990 ( Because of lag need to include 1962)
+crsp <- filter(crsp, date >= 19620700 & date <= 19901231)
+
+# Keep only share code 10, 11
+crsp <- filter(crsp, shrcd == 10 | shrcd == 11)
+
+# Write to full sample
 write.csv(crsp, "crsp_92_data.csv")
-
-
-
-
 
 #---------------------------------------------------------
 # (2) Table 1 pre-beta, post-beta, post-beta (ln(ME))
 #---------------------------------------------------------
 
+crsp <- read.csv("crsp_92_data.csv", stringsAsFactors = FALSE)
 
-# Get 10% percentile for each June 
-percentile_check <- filter(crsp, date = substr(date, 6, 7) == "06" & fyear == "1970")
-per <- quantile(percentile_check$me, c(.05, .15, .25, .35, .45, .55, .65, .75, .85, .95))
+# Get 10% percentile for each June and assign to portfolio
 
-                 
+for(i in unique(crsp$fyear)){
+  check <- filter(crsp, month == 06 & fyear == i)                         ###
+  per <- quantile(check$me, c(.10, .20, .30, .40, .50, .60, .70, .80, .90))
+  crsp$portf[crsp$me < per[[1]]] <- "M1"
+  crsp$portf[crsp$me >= per[[1]] & crsp$me < per[[2]] & crsp$fyear == i] <- "M2"
+  crsp$portf[crsp$me >= per[[2]] & crsp$me < per[[3]] & crsp$fyear == i] <- "M3"
+  crsp$portf[crsp$me >= per[[3]] & crsp$me < per[[4]] & crsp$fyear == i] <- "M4"
+  crsp$portf[crsp$me >= per[[4]] & crsp$me < per[[5]] & crsp$fyear == i] <- "M5"
+  crsp$portf[crsp$me >= per[[5]] & crsp$me < per[[6]] & crsp$fyear == i] <- "M6"
+  crsp$portf[crsp$me >= per[[6]] & crsp$me < per[[7]] & crsp$fyear == i] <- "M7"
+  crsp$portf[crsp$me >= per[[7]] & crsp$me < per[[8]] & crsp$fyear == i] <- "M8"
+  crsp$portf[crsp$me >= per[[8]] & crsp$me < per[[9]] & crsp$fyear == i] <- "M9"
+  crsp$portf[crsp$me >= per[[9]]]  <- "M10"
+  }
+
+# Create lag variables for vwretd
+testing <- crsp
+testing <- arrange(testing, desc(date))
+testing$lagvwretd <- lag(testing$vwretd)
+testing <- testing[complete.cases(testing),]
+
+testing$ret <- as.numeric(as.character(testing$ret))                     # R treats this as a factor, so need to remove to regress
+
+testing <- filter(crsp, month == 6)
+
+res <- testing %>% 
+  group_by(cusip, fyear) %>% 
+  arrange(desc(date)) %>% 
+  filter(n()!=1) %>% 
+  do({fm <- lm(ret~vwretd + lag(vwretd), data=.); data.frame(., beta=sum(coef(fm)[-1]))})
+
+
+test <- testing %>% 
+  group_by(cusip, fyear) %>% 
+  arrange(desc(date)) %>% 
+  filter(n()!=1) %>% 
+  do( {fm <- lm(ret~vwretd+lag(vwretd),  na.action=NULL, data=.); data.frame(., beta=summary(fm)$coefficients[2,1]+summary(fm)$coefficients[3,1])})
+
+testing <- crsp
+testing <- arrange(testing, desc(date))
+testing$ret <- as.numeric(as.character(testing$ret))                     # R treats this as a factor, so need to remove to regress
+
+mb <- lm(ret ~ vwretd + lag(vwretd), data = testing)
+summary(mb)
        
 #----------------------------------------
 # (**) CRSP and Compustat Data Merge)
