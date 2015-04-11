@@ -16,6 +16,7 @@
 rm(list=ls(all=TRUE))
 
 library(dplyr)      # Data wrangling
+library(DataCombine)   # For lag variables
 
 #-----------------------------------
 # (1) CRSP Data setup
@@ -101,9 +102,42 @@ for(i in unique(crsp$fyear)){
   crsp$portf[crsp$me >= per[[9]]]  <- "M10"
   }
 
+# Pre-Ranking betas
+crsp <- filter(crsp, ret != "C")
+crsp$ret <- as.numeric(crsp$ret)
+
+# Select only June
+pre <- filter(crsp, month == 06)
+
+# Lag ewretd
+pre <- pre %>% 
+  group_by(cusip) %>% 
+  arrange(desc(date)) %>% 
+  mutate(lagewretd = lag(ewretd))
+
+pre <- filter(pre, lagewretd != "NA")
+
+# Pre-ranking beta regressions
+res1 <- pre %>%  
+  group_by(cusip) %>% 
+  arrange(desc(date)) %>% 
+  mutate(n=n()) %>%
+  do(data.frame(., beta=ifelse(.$n > 2,
+   sum(coef(lm(ret~ewretd+lagewretd, data=.))[-1]), NA)))
+
+max(unique(res1$beta))
+
+
+
+
 # Regress ret ~ vwretd + lag(vwretd)
 crsp <- filter(crsp, ret != "C")
 crsp$ret <- as.numeric(crsp$ret)
+
+
+crsp <- arrange(crsp, desc(date))
+crsp <- slide(crsp, Var = "ewretd", GroupVar = c("cusip", "fyear"), slideBy = -1)
+crsp <- filter(crsp, ewretd-1 != "NA")
 
 # Lag ewretd
 crsp <- crsp %>% 
@@ -114,13 +148,19 @@ crsp <- filter(crsp, lagewretd != "NA")
 
 
 res1 <- crsp %>%  
-  group_by(cusip, fyear) %>% 
+  group_by(fyear) %>% 
   arrange(desc(date)) %>% 
   mutate(n=n()) %>%
   do(data.frame(., beta=ifelse(.$n > 2,
-   sum(coef(lm(ret~ewretd+lag(ewretd), data=.))[-1]), NA)))
+   sum(coef(lm(ret~ewretd+lagewretd, data=.))[-1]), NA)))
+max(unique(res1$beta))
 
+library(plm)
 
+test <- filter(pre, fyear == 1970 & portf == "M1")
+
+tlm <- lm(ret ~ ewretd + lagewretd, data = pre)
+summary(tlm)
 
 #----------------------------------------
 # (**) CRSP and Compustat Data Merge)
