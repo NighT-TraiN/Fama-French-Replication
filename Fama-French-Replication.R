@@ -75,26 +75,31 @@ library(readr)
 setwd("/run/media/john/1TB/Projects/Fama-French Replicatoin/")
 crsp <- read_csv("crsp_92_data.csv")
 
-# crsp <- read.csv("crsp_92_data.csv", stringsAsFactors = FALSE)
+# Select only columns needed
+crsp <- select(crsp, permco,date, ret, vwretd, ewretd, fyear, month, me, portf)
 
 # Get 10% decile ME for each June and assign to portfolio
 
 crsp$fyear <- as.integer(crsp$fyear)
 crsp$month <- as.integer(crsp$month)
 
-for(i in unique(crsp$fyear)){
-  check <- filter(crsp, month == 06 & fyear == i)                         ###
-  per <- quantile(check$me, c(.10, .20, .30, .40, .50, .60, .70, .80, .90))
-  crsp$portf[crsp$me < per[[1]]] <- "M1"
-  crsp$portf[crsp$me >= per[[1]] & crsp$me < per[[2]] & crsp$fyear == i] <- "M2"
-  crsp$portf[crsp$me >= per[[2]] & crsp$me < per[[3]] & crsp$fyear == i] <- "M3"
-  crsp$portf[crsp$me >= per[[3]] & crsp$me < per[[4]] & crsp$fyear == i] <- "M4"
-  crsp$portf[crsp$me >= per[[4]] & crsp$me < per[[5]] & crsp$fyear == i] <- "M5"
-  crsp$portf[crsp$me >= per[[5]] & crsp$me < per[[6]] & crsp$fyear == i] <- "M6"
-  crsp$portf[crsp$me >= per[[6]] & crsp$me < per[[7]] & crsp$fyear == i] <- "M7"
-  crsp$portf[crsp$me >= per[[7]] & crsp$me < per[[8]] & crsp$fyear == i] <- "M8"
-  crsp$portf[crsp$me >= per[[8]] & crsp$me < per[[9]] & crsp$fyear == i] <- "M9"
-  crsp$portf[crsp$me >= per[[9]]]  <- "M10"
+# Build portfolios based on ME
+crsp$portfo=cut(crsp$me, breaks=quantile(crsp$me,probs=seq(0,1,1/10),na.rm=T),labels=F)
+
+# NOt using for test
+# for(i in unique(crsp$fyear)){
+#   check <- filter(crsp, month == 06 & fyear == i)                         ###
+#   per <- quantile(check$me, c(.10, .20, .30, .40, .50, .60, .70, .80, .90))
+#   crsp$portf[crsp$me < per[[1]]] <- "M1"
+#   crsp$portf[crsp$me >= per[[1]] & crsp$me < per[[2]] & crsp$fyear == i] <- "M2"
+#   crsp$portf[crsp$me >= per[[2]] & crsp$me < per[[3]] & crsp$fyear == i] <- "M3"
+#   crsp$portf[crsp$me >= per[[3]] & crsp$me < per[[4]] & crsp$fyear == i] <- "M4"
+#   crsp$portf[crsp$me >= per[[4]] & crsp$me < per[[5]] & crsp$fyear == i] <- "M5"
+#   crsp$portf[crsp$me >= per[[5]] & crsp$me < per[[6]] & crsp$fyear == i] <- "M6"
+#   crsp$portf[crsp$me >= per[[6]] & crsp$me < per[[7]] & crsp$fyear == i] <- "M7"
+#   crsp$portf[crsp$me >= per[[7]] & crsp$me < per[[8]] & crsp$fyear == i] <- "M8"
+#   crsp$portf[crsp$me >= per[[8]] & crsp$me < per[[9]] & crsp$fyear == i] <- "M9"
+#   crsp$portf[crsp$me >= per[[9]]]  <- "M10"
   }
 
 # Lag ewretd
@@ -115,7 +120,7 @@ crsp <- crsp %>%
 years <- crsp %>%  
   group_by(permco, fyear) %>% 
   summarize(n = n()) %>% 
-  mutate(n_cum = cumsum(n))
+  mutate(n_cum = cumsum(n)) 
 
 # function to get coefficients 
 # (further optimization should probably focus on improving this function)
@@ -137,11 +142,46 @@ get_coefs <- function(.permco, .fyear, .n_cum){
 models_dplyr <- years %>% 
   group_by(permco, fyear) %>%
   do(get_coefs(.$permco, .$fyear, .$n_cum))
-  
-# data.table option
-library(data.table)
-models_dt <- as.data.table(as.data.frame(years))[, get_coefs(permco, fyear, n_cum), by = list(permco, fyear)]
-)
+
+# Remove NA's
+models_dplyr <- filter(models_dplyr, ewretd != "NA" | lagewretd != "NA")
+models_dplyr$sum <- models_dplyr$ewretd + models_dplyr$lagewretd
+
+# Write out to save
+write.csv(models_dplyr, "prerank_betas.csv")
+
+# Read prerank
+models_dplyr <- read_csv("prerank_betas.csv")
+
+
+# Merge with crsp data set
+merge <- select(crsp, permco, portf, portfo, me, ret, fyear, month)
+prerank <- inner_join(models_dplyr, merge, by = "permco")
+
+# Sum ewretd and lagewretd to get pre-beta
+prerank_betas <- prerank %>% 
+  group_by(permco, portf) %>% 
+  mutate(pre_beta = mean(sum))
+
+# Rank pre-betas
+prerank_betas <- prerank_betas %>% 
+  group_by(portfo) %>%
+  mutate(beta_rank = cut(pre_beta, labels=1:10, include.lowest=TRUE, breaks=(pre_beta %>% quantile(seq(0, 1, by=0.1)) %>% unique)) %>%      
+  as.character) %>% ungroup
+
+prerank_betas$beta_rank <- as.numeric(prerank_betas$beta_rank)
+
+test <- filter(prerank_betas, portfo == 10 & beta_rank == 10)
+
+test2 <- test %>% 
+  group_by(permco, fyear.x) %>% 
+  mutate(avg_m_ret = mean(ret))
+
+mean(test2$ret)*100
+mean(test$ret)*100
+
+##########  Avg Returns are the opposite of what they should be.  Need to check all code again.
+
 
 #----------------------------------------
 # (**) CRSP and Compustat Data Merge)
