@@ -32,21 +32,24 @@ colnames(crsp) <- tolower(colnames(crsp))
 # Fix missing fyears
 crsp$fyear <- substr(crsp$date, 1, 4)
 
-# Only keep those stocks with returns at the end of June
-crsp <- crsp %>%
-  group_by(permco, fyear) %>%
-  mutate(month = substr(date, 5, 6),
-         has_June = any(month == "06"))
+# Add Month
 
-crsp <- filter(crsp, has_June == TRUE)
+crsp$month <- substr(crsp$date, 5, 6)
+# Only keep those stocks with returns at the end of June
+# crsp <- crsp %>%
+#   group_by(permco, fyear) %>%
+#   mutate(month = substr(date, 5, 6),
+#          has_June = any(month == "06"))
+# 
+# crsp <- filter(crsp, has_June == TRUE)
 
 # Only keep those stocks with returns at the end of December
-crsp <- crsp %>%
-  group_by(permco, fyear) %>%
-  mutate(month = substr(date, 5, 6),
-         has_Dec = any(month == "12"))
-
-crsp <- filter(crsp, has_Dec == TRUE)
+# crsp <- crsp %>%
+#   group_by(permco, fyear) %>%
+#   mutate(month = substr(date, 5, 6),
+#          has_Dec = any(month == "12"))
+# 
+# crsp <- filter(crsp, has_Dec == TRUE)
 
 # Calculate Market Equity (ME) : ME = prc*shrout
 crsp$me <- (abs(crsp$prc)*crsp$shrout)/1000
@@ -76,31 +79,14 @@ setwd("/run/media/john/1TB/Projects/Fama-French Replicatoin/")
 crsp <- read_csv("crsp_92_data.csv")
 
 # Select only columns needed
-crsp <- select(crsp, permco,date, ret, vwretd, ewretd, fyear, month, me, portf)
+crsp <- select(crsp, permco,date, ret, vwretd, ewretd, fyear, month, me)
 
 # Get 10% decile ME for each June and assign to portfolio
-
 crsp$fyear <- as.integer(crsp$fyear)
 crsp$month <- as.integer(crsp$month)
 
 # Build portfolios based on ME
 crsp$portfo=cut(crsp$me, breaks=quantile(crsp$me,probs=seq(0,1,1/10),na.rm=T),labels=F)
-
-# NOt using for test
-# for(i in unique(crsp$fyear)){
-#   check <- filter(crsp, month == 06 & fyear == i)                         ###
-#   per <- quantile(check$me, c(.10, .20, .30, .40, .50, .60, .70, .80, .90))
-#   crsp$portf[crsp$me < per[[1]]] <- "M1"
-#   crsp$portf[crsp$me >= per[[1]] & crsp$me < per[[2]] & crsp$fyear == i] <- "M2"
-#   crsp$portf[crsp$me >= per[[2]] & crsp$me < per[[3]] & crsp$fyear == i] <- "M3"
-#   crsp$portf[crsp$me >= per[[3]] & crsp$me < per[[4]] & crsp$fyear == i] <- "M4"
-#   crsp$portf[crsp$me >= per[[4]] & crsp$me < per[[5]] & crsp$fyear == i] <- "M5"
-#   crsp$portf[crsp$me >= per[[5]] & crsp$me < per[[6]] & crsp$fyear == i] <- "M6"
-#   crsp$portf[crsp$me >= per[[6]] & crsp$me < per[[7]] & crsp$fyear == i] <- "M7"
-#   crsp$portf[crsp$me >= per[[7]] & crsp$me < per[[8]] & crsp$fyear == i] <- "M8"
-#   crsp$portf[crsp$me >= per[[8]] & crsp$me < per[[9]] & crsp$fyear == i] <- "M9"
-#   crsp$portf[crsp$me >= per[[9]]]  <- "M10"
-  }
 
 # Lag ewretd
 crsp <- crsp %>% 
@@ -138,9 +124,9 @@ get_coefs <- function(.permco, .fyear, .n_cum){
   }
 }
 
-# dplyr option
+# dplyr option (Takes ~ 2 hours)
 models_dplyr <- years %>% 
-  group_by(permco, fyear) %>%
+  group_by(fyear, permco) %>%
   do(get_coefs(.$permco, .$fyear, .$n_cum))
 
 # Remove NA's
@@ -155,36 +141,119 @@ models_dplyr <- read_csv("prerank_betas.csv")
 
 
 # Merge with crsp data set
-merge <- select(crsp, permco, portf, portfo, me, ret, fyear, month)
+merge <- select(crsp, permco, portfo, me, ret, fyear, month)
 prerank <- inner_join(models_dplyr, merge, by = "permco")
 
 # Sum ewretd and lagewretd to get pre-beta
 prerank_betas <- prerank %>% 
-  group_by(permco, portf) %>% 
-  mutate(pre_beta = mean(sum))
+  group_by(permco) %>% 
+  summarize(pre_beta = mean(sum), ret = mean(ret), me = mean(me), ewr = mean(ewretd))
 
-# Rank pre-betas
-prerank_betas <- prerank_betas %>% 
+# Rank pre-betas and me
+prerank_betas$beta_rank=cut(prerank_betas$pre_beta, breaks=quantile(prerank_betas$pre_beta, probs=seq(0,1,1/10), na.rm=T),labels=F)
+prerank_betas$portfo=cut(prerank_betas$me, breaks=quantile(prerank_betas$me,probs=seq(0,1,1/10),na.rm=T),labels=F)
+
+prerank_betas <- filter(prerank_betas, beta_rank != "NA" & portfo != "NA")
+
+# Build data frame for pre-ranking betas
+
+df <- prerank_betas %>%
+  group_by(portfo, beta_rank) %>%
+  summarise(mer = mean(ewr))
+
+df <- prerank_betas %>%
+  group_by(beta_rank) %>%
+  summarise(mer = mean(ewr))
+df
+  
+table1a <- read_csv("/home/john/Dropbox/UHM/Classes/Fin 701 - International Finance Theory/Replication/Table1_A.csv")
+table1a
+
+# Table 1B - Post Ranking Betas
+
+# Function to get coef
+get_postcoefs <- function(portfo){
+    my_dat <- prerank_betas %>%
+      filter(portfo == portfo) %>%
+    lm(ret ~ ewr, my_dat) %>% 
+      coef %>% 
+      as.list %>% 
+      as_data_frame
+}
+
+
+postrank <- prerank_betas %>%
   group_by(portfo) %>%
-  mutate(beta_rank = cut(pre_beta, labels=1:10, include.lowest=TRUE, breaks=(pre_beta %>% quantile(seq(0, 1, by=0.1)) %>% unique)) %>%      
-  as.character) %>% ungroup
+  do(get_postcoefs(.$portfo))
 
-prerank_betas$beta_rank <- as.numeric(prerank_betas$beta_rank)
+postrank <- prerank_betas
+postbetas <- data.frame(LowB = numeric(),
+                        B2 = numeric(),
+                        B3 = numeric(),
+                        B4 = numeric(),
+                        B5 = numeric(),
+                        B6 = numeric(),
+                        B7 = numeric(),
+                        B8 = numeric(),
+                        B9 = numeric(),
+                        B10 = numeric())
 
-test <- filter(prerank_betas, portfo == 10 & beta_rank == 10)
+size <- data.frame(LowB = numeric(),
+                        B2 = numeric(),
+                        B3 = numeric(),
+                        B4 = numeric(),
+                        B5 = numeric(),
+                        B6 = numeric(),
+                        B7 = numeric(),
+                        B8 = numeric(),
+                        B9 = numeric(),
+                        B10 = numeric())
 
-test2 <- test %>% 
-  group_by(permco, fyear.x) %>% 
-  mutate(avg_m_ret = mean(ret))
+# Get Post Rank Betas
+for (i in unique(postrank$portfo)){
+  for (j in unique(postrank$beta_rank)) {
+    frame <- filter(postrank, portfo == i & beta_rank == j)
+    postbetas[[i,j]] <- as.numeric(lm(ret ~ ewr, data = frame)$coefficients[2]*100)
+  }
+}
 
-mean(test2$ret)*100
-mean(test$ret)*100
+# All post rank betas for portfolio rank
+for (i in unique(postrank$portfo)){
+  frame <- filter(postrank, portfo == i)
+  betas[[i]] <- lm(ret ~ ewr, data = frame)$coefficients[2]
+}
+                                   
 
-##########  Avg Returns are the opposite of what they should be.  Need to check all code again.
+# Get all post rank betas for beta rank
+for (i in unique(postrank$beta_rank)){
+    frame <- filter(postrank, beta_rank == i)
+    betas[[i]] <- lm(ret ~ ewr, data = frame)$coefficients[2]
+  }
 
+# Get all betas for portfo data frame
+for (i in unique(postrank$portfo)){
+    frame <- filter(postrank, portfo == i & beta_rank == j)
+    size[[i,j]] <- mean(log(frame$me))
+  }
 
+# Get all betas for beta data frame
+for (i in unique(postrank$beta_rank)){
+    frame <- filter(postrank, portfo == i & beta_rank == j)
+    size[[i,j]] <- mean(log(frame$me))
+  }
+}
+
+portsize <- postrank %>%
+  group_by(portfo) %>%
+  summarize(sizeme = mean(log(me)))
+  
+portsize <- postrank %>%
+  group_by(beta_rank) %>%
+  summarize(sizeme = mean(log(me)))
+
+### NOT FINISHED
 #----------------------------------------
-# (**) CRSP and Compustat Data Merge)
+# (**) CRSP and Compustat Data Merge
 #----------------------------------------
                  
                                             
@@ -267,6 +336,8 @@ data <- mutate(data, month = as.numeric(substr(datadate, 5, 6))) %>%
 
 # Write out sample dataset after all checks and ready for regressions (obs = 11,721)
 write.csv(data, "92_data.csv")
+
+
 
 
 ##########################
